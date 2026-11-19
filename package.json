@@ -1,0 +1,13 @@
+{
+  "name": "notes",
+  "version": "1.0.0",
+  "description": "Schlichte Listen-App für die Familie – selbst gehostet, offlinefähig, live geteilt.",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
