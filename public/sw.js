@@ -1,5 +1,6 @@
 /* Notes – Service Worker: hält die App offline verfügbar. */
-const CACHE = 'notes-v1';
+const CACHE = 'notes-v2';
+const PHOTOS = 'notes-photos';
 const SHELL = [
   '/',
   '/app.css',
@@ -16,7 +17,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== PHOTOS).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -26,6 +27,17 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/photos/')) {
+    // Fotos ändern sich nie: einmal geladen, auch offline anzeigen
+    e.respondWith(caches.open(PHOTOS).then(async (cache) => {
+      const hit = await cache.match(req);
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res.ok) cache.put(req, res.clone());
+      return res;
+    }));
+    return;
+  }
   if (url.pathname.startsWith('/api/')) return; // Daten laufen immer direkt zum Server
 
   const key = req.mode === 'navigate' ? '/' : url.pathname;

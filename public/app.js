@@ -17,6 +17,13 @@ const COLORS = {
 };
 const EMOJIS = ['🛒', '✅', '📝', '🎁', '🏝️', '🏠', '🧺', '💊', '🎄', '🎂', '📚', '🧸',
   '🔧', '🌱', '🍳', '✈️', '🚗', '💡', '🎉', '🐾', '💼', '🏃', '🎨', '❤️'];
+const SORTS = {
+  added: 'Wie hinzugefügt',
+  newest: 'Neueste zuerst',
+  alpha: 'Alphabetisch (A–Z)',
+  due: 'Nach Fälligkeit',
+};
+const THEMES = { auto: 'Automatisch', light: 'Hell', dark: 'Dunkel' };
 const SUGGESTIONS = [
   { name: 'Einkaufsliste', emoji: '🛒', color: 'green' },
   { name: 'Meine Aufgaben', emoji: '✅', color: 'blue' },
@@ -36,6 +43,12 @@ const I = {
   trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l.9 12.2c.1 1 .9 1.8 1.9 1.8h5.4c1 0 1.8-.8 1.9-1.8L17.5 7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
   cloudOff: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 18.5h9.8a3.7 3.7 0 00.6-7.4A5.6 5.6 0 007.4 9.5 4.5 4.5 0 007.5 18.5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><path d="M4 4l16 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+  moon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>',
+  auto: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg>',
+  camera: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5c0-1.1.9-2 2-2h1.8l1.5-2h5.4l1.5 2H18c1.1 0 2 .9 2 2V17c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="12" cy="12.7" r="3.3" fill="none" stroke="currentColor" stroke-width="1.9"/></svg>',
+  image: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3" fill="none" stroke="currentColor" stroke-width="1.9"/><circle cx="9" cy="9.5" r="1.7" fill="currentColor"/><path d="M4 17l4.8-4.5 3.4 3 3-2.6L20 17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>',
+  sort: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M3.5 16.5L7 20l3.5-3.5M17 20V4M13.5 7.5L17 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
@@ -49,6 +62,37 @@ let authed = false;      // Server hat Anmeldung bestätigt (oder offline mit ge
 let es = null;           // EventSource
 const recentlyDone = new Map(); // id -> Zeitpunkt, damit abgehakte Punkte kurz sichtbar bleiben
 let prefs = loadJSON('notes.prefs', { showDone: {} });
+if (!prefs.showDone) prefs.showDone = {};
+if (!THEMES[prefs.theme]) prefs.theme = 'auto';
+const pendingPhotos = new Map(); // Foto-ID -> { itemId, blob } – noch nicht hochgeladen
+const localUrls = new Map();     // Foto-ID -> lokale Vorschau-Adresse
+
+// Kleiner Speicher für Fotos, die noch hochgeladen werden müssen (überlebt Neustart der App)
+const photoStore = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((resolve, reject) => {
+    const r = indexedDB.open('notes', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('photos', { keyPath: 'photoId' });
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  }));
+  const run = async (mode, fn) => {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction('photos', mode);
+      const req = fn(t.objectStore('photos'));
+      t.oncomplete = () => resolve(req ? req.result : undefined);
+      t.onerror = () => reject(t.error);
+    });
+  };
+  return {
+    put: (v) => run('readwrite', (st) => st.put(v)),
+    del: (k) => run('readwrite', (st) => st.delete(k)),
+    all: () => run('readonly', (st) => st.getAll()),
+  };
+})();
+
+const photoSrc = (id) => localUrls.get(id) || `/api/photos/${id}`;
 
 function loadJSON(key, fallback) {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
@@ -133,6 +177,22 @@ function applyLocal(op) {
       if (l && l.ownerId === me.id) l.sharedWith = op.userIds.slice();
       break;
     }
+    case 'list.sort': {
+      if (S.lists[op.id] && SORTS[op.sort]) S.lists[op.id].sort = op.sort;
+      break;
+    }
+    case 'item.restore': {
+      if (!S.items[op.id] && op.snapshot && S.lists[op.snapshot.listId]) S.items[op.id] = { ...op.snapshot };
+      break;
+    }
+    case 'photo.delete': {
+      for (const id in S.items) {
+        const it = S.items[id];
+        if (it.photos && it.photos.includes(op.id)) it.photos = it.photos.filter((x) => x !== op.id);
+      }
+      if (pendingPhotos.has(op.id)) { pendingPhotos.delete(op.id); photoStore.del(op.id).catch(() => {}); }
+      break;
+    }
     case 'list.clearDone': {
       for (const id in S.items) if (S.items[id].listId === op.id && S.items[id].done) delete S.items[id];
       break;
@@ -145,6 +205,7 @@ function applyLocal(op) {
         S.items[op.id] = {
           id: op.id, listId: f.listId, title: f.title || '', done: !!f.done, doneAt: f.done ? t : null,
           note: f.note || '', due: f.due || null, position: f.position || 0, createdBy: me.id, created: t, updated: t,
+          photos: [],
         };
       } else {
         if (f.title !== undefined && f.title.trim()) it.title = f.title.trim();
@@ -204,7 +265,7 @@ function flush() {
       const batch = outbox.slice(0, 200);
       batch.forEach((o) => inflight.add(o.opId));
       try {
-        await api('POST', '/api/ops', { ops: batch.map(({ ts, ...rest }) => rest) });
+        await api('POST', '/api/ops', { ops: batch.map(({ ts, snapshot, ...rest }) => rest) });
         const sent = new Set(batch.map((o) => o.opId));
         outbox = outbox.filter((o) => !sent.has(o.opId));
         saveOutbox();
@@ -228,6 +289,7 @@ async function sync() {
   syncing = true;
   try {
     await flush();
+    await uploadPhotos();
     const d = await api('GET', `/api/sync?since=${S.rev || 0}`);
     mergeSync(d);
     setOnline(true);
@@ -253,9 +315,100 @@ function mergeSync(d) {
   }
   S.rev = d.rev;
   for (const op of outbox) applyLocal(op); // eigene, noch offene Änderungen bleiben sichtbar
+  reapplyPendingPhotos();
   for (const id in S.items) if (!S.lists[S.items[id].listId]) delete S.items[id];
   saveState();
   renderAll();
+}
+
+function reapplyPendingPhotos() {
+  for (const [pid, p] of pendingPhotos) {
+    const it = S.items[p.itemId];
+    if (!it) continue;
+    if (!it.photos) it.photos = [];
+    if (!it.photos.includes(pid)) it.photos.push(pid);
+  }
+}
+
+async function loadPendingPhotos() {
+  try {
+    const all = await photoStore.all();
+    for (const rec of all) {
+      if (rec.userId !== me.id) continue;
+      pendingPhotos.set(rec.photoId, { itemId: rec.itemId, blob: rec.blob });
+      if (!localUrls.has(rec.photoId)) localUrls.set(rec.photoId, URL.createObjectURL(rec.blob));
+    }
+    reapplyPendingPhotos();
+  } catch { /* kein IndexedDB verfügbar */ }
+}
+
+let uploading = null;
+function uploadPhotos() {
+  if (uploading) return uploading;
+  if (!pendingPhotos.size || !authed) return Promise.resolve();
+  uploading = (async () => {
+    for (const [pid, p] of [...pendingPhotos]) {
+      let res;
+      try {
+        res = await fetch(`/api/photos/${pid}?item=${encodeURIComponent(p.itemId)}`, {
+          method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'image/jpeg' }, body: p.blob,
+        });
+      } catch { setOnline(false); break; }
+      if (res.status === 401) { authed = false; showAuth('login'); break; }
+      const pendingItemOp = outbox.some((o) => o.id === p.itemId);
+      const drop = res.ok || res.status === 410 || res.status === 400 || res.status === 413
+        || (res.status === 404 && !S.items[p.itemId] && !pendingItemOp);
+      if (drop) {
+        pendingPhotos.delete(pid);
+        try { await photoStore.del(pid); } catch { /* egal */ }
+        if (res.status === 413) toast('Ein Foto war zu groß und wurde nicht gespeichert');
+      } else if (res.status >= 500) {
+        if (res.status >= 502 && res.status <= 504) setOnline(false);
+        break;
+      }
+    }
+  })();
+  return uploading.finally(() => { uploading = null; renderStatus(); });
+}
+
+async function shrinkImage(file) {
+  let src;
+  try {
+    src = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch {
+    src = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Dieses Bild kann nicht gelesen werden'));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  const k = Math.min(1, 1600 / Math.max(src.width, src.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(src.width * k);
+  c.height = Math.round(src.height * k);
+  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+  return new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('Foto konnte nicht verarbeitet werden'))), 'image/jpeg', 0.82));
+}
+
+async function addPhotos(itemId, files) {
+  for (const file of files) {
+    if (!S.items[itemId]) return;
+    try {
+      const blob = await shrinkImage(file);
+      const pid = newId();
+      pendingPhotos.set(pid, { itemId, blob });
+      localUrls.set(pid, URL.createObjectURL(blob));
+      try { await photoStore.put({ photoId: pid, itemId, userId: me.id, blob }); } catch { /* nur im Speicher */ }
+      const it = S.items[itemId];
+      if (it) { it.photos = [...(it.photos || []), pid]; }
+      saveState();
+      renderAll();
+    } catch (e) {
+      toast(e.message || 'Foto konnte nicht hinzugefügt werden');
+    }
+  }
+  sync();
 }
 
 function connectEvents() {
@@ -279,7 +432,26 @@ function connectEvents() {
 window.addEventListener('online', () => { setOnline(true); sync(); });
 window.addEventListener('offline', () => setOnline(false));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
-setInterval(() => { if (outbox.length || !online) sync(); }, 15000);
+setInterval(() => { if (outbox.length || pendingPhotos.size || !online) sync(); }, 15000);
+
+// ---------------------------------------------------------------- Design (Hell/Dunkel)
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const t = prefs.theme;
+  if (t === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = t;
+  const dark = t === 'dark' || (t === 'auto' && darkQuery.matches);
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute('content', dark ? '#141619' : '#f5f3ee'));
+}
+function setTheme(t) {
+  prefs.theme = THEMES[t] ? t : 'auto';
+  savePrefs();
+  applyTheme();
+  renderAll();
+}
+const themeIcon = () => (prefs.theme === 'light' ? I.sun : prefs.theme === 'dark' ? I.moon : I.auto);
+darkQuery.addEventListener('change', applyTheme);
+applyTheme();
 
 // ---------------------------------------------------------------- Hilfen für Anzeige
 const listColor = (l) => COLORS[l?.color] || COLORS.blue;
@@ -318,8 +490,8 @@ const navStack = [location.hash || '#/'];
 function route() {
   const h = location.hash.replace(/^#/, '') || '/';
   const p = h.split('/').filter(Boolean);
-  if (p[0] === 'l' && p[1]) return { view: 'list', listId: p[1], itemId: p[2] === 'i' ? p[3] : null };
-  if (p[0] === 'geplant') return { view: 'planned', itemId: p[1] === 'i' ? p[2] : null };
+  if (p[0] === 'l' && p[1]) return { view: 'list', listId: p[1], itemId: p[2] === 'i' ? p[3] : null, photoId: p[4] === 'f' ? p[5] : null };
+  if (p[0] === 'geplant') return { view: 'planned', itemId: p[1] === 'i' ? p[2] : null, photoId: p[3] === 'f' ? p[4] : null };
   if (p[0] === 'einstellungen') return { view: 'settings' };
   return { view: 'home' };
 }
@@ -348,6 +520,42 @@ function renderAll(routeChanged = false) {
   renderSide(r);
   renderMain(r);
   renderPanel(r, routeChanged);
+  renderViewer(r);
+}
+
+function itemHash(r) {
+  return r.view === 'planned' ? `#/geplant/i/${r.itemId}` : `#/l/${r.listId}/i/${r.itemId}`;
+}
+
+function renderViewer(r) {
+  const v = $('#viewer');
+  const it = r.itemId && S.items[r.itemId];
+  if (!r.photoId || !it || !(it.photos || []).includes(r.photoId)) {
+    if (!v.hidden) { v.hidden = true; v.innerHTML = ''; }
+    if (r.photoId && it) location.replace(itemHash(r));
+    return;
+  }
+  const photos = it.photos;
+  const idx = photos.indexOf(r.photoId);
+  const base = itemHash(r);
+  v.innerHTML = `
+    <header class="viewer-head">
+      <button class="icon-btn" data-action="close-viewer" aria-label="Schließen">${I.close}</button>
+      <span>${photos.length > 1 ? `${idx + 1} / ${photos.length}` : esc(it.title)}</span>
+      <button class="icon-btn" data-action="delete-photo" data-id="${r.photoId}" aria-label="Foto löschen">${I.trash}</button>
+    </header>
+    <div class="viewer-img">
+      <img src="${photoSrc(r.photoId)}" alt="Foto zu ${esc(it.title)}">
+      ${idx > 0 ? `<a class="nav prev" href="${base}/f/${photos[idx - 1]}" aria-label="Vorheriges">${I.back}</a>` : ''}
+      ${idx < photos.length - 1 ? `<a class="nav next" href="${base}/f/${photos[idx + 1]}" aria-label="Nächstes">${I.chevron}</a>` : ''}
+    </div>`;
+  v.hidden = false;
+}
+
+function photosHtml(it) {
+  const photos = it.photos || [];
+  const base = location.hash.replace(/\/f\/[^/]+$/, '');
+  return photos.map((pid) => `<a class="photo-tile ${pendingPhotos.has(pid) ? 'pending' : ''}" href="${base}/f/${pid}"><img src="${photoSrc(pid)}" alt="" loading="lazy" decoding="async"></a>`).join('');
 }
 
 function keepFocus(fn) {
@@ -368,8 +576,9 @@ function keepFocus(fn) {
 }
 
 function statusHtml() {
-  if (!online) return `<span class="status off">${I.cloudOff}Offline${outbox.length ? ' · wird später übertragen' : ''}</span>`;
-  if (outbox.length) return '<span class="status sync"><span class="dot"></span>Wird übertragen …</span>';
+  const pending = outbox.length + pendingPhotos.size;
+  if (!online) return `<span class="status off">${I.cloudOff}Offline${pending ? ' · wird später übertragen' : ''}</span>`;
+  if (pending) return '<span class="status sync"><span class="dot"></span>Wird übertragen …</span>';
   return '';
 }
 function renderStatus() { document.querySelectorAll('[data-status]').forEach((el) => { el.innerHTML = statusHtml(); }); }
@@ -380,7 +589,10 @@ function renderSide(r) {
   const html = `
     <header class="side-head">
       <div class="brand"><span class="logo">${I.check}</span>Notes</div>
-      <a class="icon-btn" href="#/einstellungen" aria-label="Einstellungen"><span class="avatar me">${initials(me.name)}</span></a>
+      <div class="head-actions">
+        <button class="icon-btn theme-btn" data-action="cycle-theme" aria-label="Design: ${THEMES[prefs.theme]}" title="Design: ${THEMES[prefs.theme]}">${themeIcon()}</button>
+        <a class="icon-btn" href="#/einstellungen" aria-label="Einstellungen"><span class="avatar me">${initials(me.name)}</span></a>
+      </div>
     </header>
     <div data-status class="status-wrap">${statusHtml()}</div>
     <nav class="lists">
@@ -414,6 +626,8 @@ function itemRow(it, opts = {}) {
   if (opts.planned && l) meta.push(`<span class="meta-list" style="--lc:${listColor(l)}">${esc(l.emoji)} ${esc(l.name)}</span>`);
   if (it.due) meta.push(`<span class="due ${it.done ? '' : dueClass(it.due)}">${I.cal}${esc(dueLabel(it.due))}</span>`);
   if (it.note && it.note.trim()) meta.push(`<span class="has-note">${I.note}</span>`);
+  const photos = it.photos || [];
+  if (photos.length > 1) meta.push(`<span class="has-photo">${I.camera}${photos.length}</span>`);
   if (l && (l.ownerId !== me.id || l.sharedWith.length) && it.createdBy && it.createdBy !== me.id) {
     meta.push(`<span class="by">${esc(userName(it.createdBy))}</span>`);
   }
@@ -423,6 +637,7 @@ function itemRow(it, opts = {}) {
       <span class="title">${esc(it.title)}</span>
       ${meta.length ? `<span class="meta">${meta.join('')}</span>` : ''}
     </a>
+    ${photos.length ? `<a class="thumb" href="${href}/f/${photos[0]}" aria-label="Foto ansehen"><img src="${photoSrc(photos[0])}" alt="" loading="lazy" decoding="async"></a>` : ''}
   </div>`;
 }
 
@@ -437,7 +652,7 @@ function renderMain(r) {
 
 function listView(l) {
   const items = itemsOf(l.id);
-  const open = items.filter((i) => !i.done || recentlyDone.has(i.id)).sort((a, b) => (a.position - b.position) || (a.created - b.created));
+  const open = sortItems(items.filter((i) => !i.done || recentlyDone.has(i.id)), l.sort);
   const done = items.filter((i) => i.done && !recentlyDone.has(i.id)).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
   const showDone = !!prefs.showDone[l.id];
   const isOwner = l.ownerId === me.id;
@@ -464,6 +679,35 @@ function listView(l) {
       <input id="add-input" name="title" placeholder="Punkt hinzufügen" enterkeyhint="enter" autocomplete="off" autocapitalize="sentences" maxlength="500">
       <button class="add-btn" type="submit" aria-label="Hinzufügen">${I.plus}</button>
     </form>`;
+}
+
+function sortItems(items, sort) {
+  const byAdded = (a, b) => (a.position - b.position) || (a.created - b.created);
+  const cmp = {
+    added: byAdded,
+    newest: (a, b) => byAdded(b, a),
+    alpha: (a, b) => a.title.localeCompare(b.title, 'de', { sensitivity: 'base', numeric: true }) || byAdded(a, b),
+    due: (a, b) => {
+      if (a.due && b.due) return a.due.localeCompare(b.due) || byAdded(a, b);
+      if (a.due) return -1;
+      if (b.due) return 1;
+      return byAdded(a, b);
+    },
+  }[sort] || byAdded;
+  return items.slice().sort(cmp);
+}
+
+function sortSheet(list) {
+  const cur = SORTS[list.sort] ? list.sort : 'added';
+  openSheet(`<h2>Sortieren</h2>
+    <p class="muted small" style="margin:-6px 0 12px">Gilt für alle, mit denen „${esc(list.name)}“ geteilt ist.</p>
+    <div class="menu radio-menu">${Object.entries(SORTS).map(([k, v]) => `
+      <button data-sort="${k}" class="${k === cur ? 'sel' : ''}"><span>${v}</span>${k === cur ? I.check : ''}</button>`).join('')}</div>`, (sheet) => {
+    sheet.querySelectorAll('[data-sort]').forEach((b) => b.addEventListener('click', () => {
+      closeSheet();
+      if (b.dataset.sort !== cur) change({ kind: 'list.sort', id: list.id, sort: b.dataset.sort });
+    }));
+  });
 }
 
 function plannedView() {
@@ -506,6 +750,14 @@ function settingsView() {
       <section class="card">
         <div class="me-row"><span class="avatar me big">${initials(me.name)}</span>
           <div><strong>${esc(me.name)}</strong><div class="muted">${me.isAdmin ? 'Verwalter' : 'Familienmitglied'}</div></div></div>
+      </section>
+
+      <section class="card">
+        <h2>Darstellung</h2>
+        <div class="segmented" role="radiogroup" aria-label="Design">
+          ${Object.entries(THEMES).map(([k, v]) => `<button role="radio" aria-checked="${prefs.theme === k}" class="${prefs.theme === k ? 'sel' : ''}" data-action="set-theme" data-theme="${k}">${k === 'auto' ? I.auto : k === 'light' ? I.sun : I.moon}<span>${v}</span></button>`).join('')}
+        </div>
+        <p class="muted small" style="margin:10px 0 0">„Automatisch“ folgt der Einstellung deines Handys bzw. Computers. Gilt für dieses Gerät.</p>
       </section>
 
       <section class="card">
@@ -562,6 +814,8 @@ function renderPanel(r, routeChanged) {
     // Während getippt wird nur die Abhaken-Schaltfläche aktualisieren
     const c = panel.querySelector('.detail-check');
     if (c) c.closest('.detail').classList.toggle('done', it.done);
+    const g = $('#d-photos');
+    if (g) g.innerHTML = photosHtml(it);
     return;
   }
   panelItemId = id;
@@ -597,6 +851,15 @@ function renderPanel(r, routeChanged) {
       <div class="field">
         <div class="field-label">${I.note}Notiz</div>
         <textarea id="d-note" rows="4" placeholder="Notiz, Link, Menge …">${esc(it.note || '')}</textarea>
+      </div>
+
+      <div class="field">
+        <div class="field-label">${I.camera}Fotos</div>
+        <div class="photo-grid" id="d-photos">${photosHtml(it)}</div>
+        <div class="photo-btns">
+          <label class="btn small soft">${I.camera}<span>Foto aufnehmen</span><input type="file" accept="image/*" capture="environment" data-photo-input hidden></label>
+          <label class="btn small soft">${I.image}<span>Aus Galerie</span><input type="file" accept="image/*" multiple data-photo-input hidden></label>
+        </div>
       </div>
 
       ${lists.length > 1 ? `<div class="field">
@@ -790,6 +1053,7 @@ function listMenu(list) {
     <div class="menu">
       ${isOwner ? `<button data-m="edit">✏️ Name, Symbol & Farbe</button>
       <button data-m="share">👥 Teilen${list.sharedWith.length ? ` <span class="muted">(${list.sharedWith.length})</span>` : ''}</button>` : ''}
+      <button data-m="sort">↕️ Sortieren <span class="muted">(${SORTS[list.sort] || SORTS.added})</span></button>
       ${doneCount ? `<button data-m="clear">🧹 Erledigte löschen <span class="muted">(${doneCount})</span></button>` : ''}
       ${isOwner ? '<button data-m="delete" class="danger">🗑️ Liste löschen</button>' : '<button data-m="leave" class="danger">🚪 Liste verlassen</button>'}
     </div>`;
@@ -799,6 +1063,7 @@ function listMenu(list) {
       closeSheet();
       if (m === 'edit') listEditSheet(list);
       if (m === 'share') shareSheet(list);
+      if (m === 'sort') sortSheet(list);
       if (m === 'clear') {
         if (await confirmSheet(`${doneCount} erledigte ${doneCount === 1 ? 'Punkt' : 'Punkte'} endgültig löschen?`, 'Löschen')) {
           change({ kind: 'list.clearDone', id: list.id });
@@ -868,8 +1133,9 @@ document.addEventListener('click', (ev) => {
       panelItemId = null;
       closePanel();
       change({ kind: 'item.delete', id });
+      const snapshot = { ...it, photos: (it.photos || []).slice() };
       toastUndo(`„${it.title}“ gelöscht`, () => {
-        change({ kind: 'item.put', id: newId(), fields: { listId: it.listId, title: it.title, note: it.note, due: it.due, position: it.position, done: it.done } });
+        change({ kind: 'item.restore', id, snapshot });
       });
       break;
     }
@@ -885,6 +1151,23 @@ document.addEventListener('click', (ev) => {
       break;
     }
     case 'logout': logout(); break;
+    case 'cycle-theme': {
+      const order = ['auto', 'light', 'dark'];
+      setTheme(order[(order.indexOf(prefs.theme) + 1) % order.length]);
+      toast(`Design: ${THEMES[prefs.theme]}`);
+      break;
+    }
+    case 'set-theme': setTheme(el.dataset.theme); break;
+    case 'close-viewer': goBack(itemHash(r)); break;
+    case 'delete-photo': {
+      const pid = el.dataset.id;
+      confirmSheet('Dieses Foto löschen?', 'Löschen').then((ok) => {
+        if (!ok) return;
+        location.replace(itemHash(route()));
+        change({ kind: 'photo.delete', id: pid });
+      });
+      break;
+    }
     default:
   }
 });
@@ -953,6 +1236,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.target.id === 'd-title' && ev.key === 'Enter') { ev.preventDefault(); ev.target.blur(); }
   if (ev.key === 'Escape') {
     if (!$('#sheet').hidden) closeSheet();
+    else if (!$('#viewer').hidden) goBack(itemHash(route()));
     else if (panelItemId) closePanel();
   }
 });
@@ -960,6 +1244,12 @@ document.addEventListener('keydown', (ev) => {
 document.addEventListener('change', (ev) => {
   const el = ev.target;
   if (!panelItemId) return;
+  if (el.matches('[data-photo-input]')) {
+    const files = [...(el.files || [])];
+    el.value = '';
+    if (files.length) addPhotos(panelItemId, files);
+    return;
+  }
   if (el.id === 'd-due') {
     change({ kind: 'item.put', id: panelItemId, fields: { due: el.value || null } });
     renderAll(true);
@@ -1039,7 +1329,7 @@ function startApp(user) {
   document.body.className = '';
   renderAll(true);
   connectEvents();
-  sync();
+  loadPendingPhotos().then(() => { renderAll(); sync(); });
 }
 
 async function logout() {
@@ -1051,6 +1341,7 @@ async function logout() {
     localStorage.removeItem('notes.me');
   } catch { /* egal */ }
   me = null; S = null; outbox = []; authed = false;
+  pendingPhotos.clear();
   location.replace('#/');
   showAuth('login');
 }
@@ -1063,6 +1354,7 @@ async function boot() {
     me = saved;
     loadUserData();
     authed = true;
+    await loadPendingPhotos();
     renderAll(true);
     try {
       const s = await api('GET', '/api/status');
