@@ -8,7 +8,9 @@ Schlichte Listen-App für die Familie – Ersatz für Microsoft To Do.
 - Antippen öffnet Details: Fälligkeit, Notiz, in andere Liste verschieben
 - „Geplant“ zeigt alle fälligen Punkte aus allen Listen
 - Mehrere Zeilen einfügen = mehrere Punkte; ein erledigter Punkt mit gleichem Namen wird einfach wieder geöffnet
-- Hell/Dunkel automatisch, als App auf dem Handy installierbar
+- Fotos an Punkten (Kamera oder Galerie), auch offline – werden später hochgeladen
+- Sortierung pro Liste: wie hinzugefügt, neueste zuerst, alphabetisch, nach Fälligkeit
+- Design: automatisch, hell oder dunkel; als App auf dem Handy installierbar
 - Keine externen Pakete: Node.js 22 mit eingebauter SQLite-Datenbank
 
 ## Betrieb
@@ -19,4 +21,9 @@ Beim ersten Aufruf legt man das Verwalter-Konto an, weitere Personen unter Einst
 
 ## Update
 
-Neuen Code holen (`git pull` im Ordner), dann den Stack in Portainer mit „Re-pull and redeploy“ bzw. neu bauen lassen.
+```
+cd /volume1/docker/notes
+git pull
+sudo docker build -t notes:latest .
+```
+Danach in Portainer den Container `notes` neu erstellen (Recreate). Daten und Fotos in `data/` bleiben erhalten.

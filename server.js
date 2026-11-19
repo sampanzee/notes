@@ -70,7 +70,21 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE INDEX IF NOT EXISTS idx_items_list ON items(list_id, rev);
 CREATE INDEX IF NOT EXISTS idx_shares_user ON shares(user_id);
+CREATE TABLE IF NOT EXISTS photos (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  created_by INTEGER,
+  created INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_photos_item ON photos(item_id);
 `);
+// Spätere Erweiterungen der Datenbank (bestehende Daten bleiben erhalten)
+if (!db.prepare('PRAGMA table_info(lists)').all().some((c) => c.name === 'sort')) {
+  db.exec("ALTER TABLE lists ADD COLUMN sort TEXT NOT NULL DEFAULT 'added'");
+}
+const PHOTO_DIR = path.join(DATA_DIR, 'photos');
+fs.mkdirSync(PHOTO_DIR, { recursive: true });
+const SORTS = ['added', 'newest', 'alpha', 'due'];
 
 const q = {
   getMeta: db.prepare('SELECT value FROM meta WHERE key = ?'),
@@ -112,6 +126,16 @@ const q = {
   clearDone: db.prepare('UPDATE items SET deleted = 1, updated = ?, rev = ? WHERE list_id = ? AND done = 1 AND deleted = 0'),
   itemsSince: db.prepare('SELECT * FROM items WHERE list_id = ? AND rev > ?'),
   itemsAlive: db.prepare('SELECT * FROM items WHERE list_id = ? AND deleted = 0'),
+  restoreItem: db.prepare('UPDATE items SET deleted = 0, updated = ?, rev = ? WHERE id = ?'),
+  touchItem: db.prepare('UPDATE items SET updated = ?, rev = ? WHERE id = ?'),
+  setSort: db.prepare('UPDATE lists SET sort = ?, rev = ? WHERE id = ?'),
+
+  getPhoto: db.prepare('SELECT * FROM photos WHERE id = ?'),
+  photosOf: db.prepare('SELECT id FROM photos WHERE item_id = ? ORDER BY created, id'),
+  insertPhoto: db.prepare('INSERT INTO photos(id, item_id, created_by, created) VALUES(?, ?, ?, ?)'),
+  deletePhoto: db.prepare('DELETE FROM photos WHERE id = ?'),
+  orphanPhotos: db.prepare(`SELECT p.id FROM photos p JOIN items i ON i.id = p.item_id JOIN lists l ON l.id = i.list_id
+                            WHERE (i.deleted = 1 OR l.deleted = 1) AND MAX(i.updated, l.updated) < ?`),
 };
 
 let rev = Number(q.getMeta.get('rev')?.value || 0);
@@ -148,6 +172,20 @@ const isId = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(v);
 const dueOrNull = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 const color = (v, fallback = 'blue') => (COLORS.includes(v) ? v : fallback);
 const num = (v, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+
+const photoFile = (id) => path.join(PHOTO_DIR, `${id}.jpg`);
+function removePhoto(id) {
+  q.deletePhoto.run(id);
+  fs.rm(photoFile(id), { force: true }, () => {});
+}
+// Fotos von gelöschten Punkten nach 7 Tagen aufräumen (so lange geht „Rückgängig“)
+function cleanupPhotos() {
+  try {
+    for (const { id } of q.orphanPhotos.all(Date.now() - 7 * 24 * 3600 * 1000)) removePhoto(id);
+  } catch (e) { console.error('Aufräumen fehlgeschlagen:', e.message); }
+}
+cleanupPhotos();
+setInterval(cleanupPhotos, 24 * 3600 * 1000).unref();
 
 function canAccess(userId, listId) {
   if (!isId(listId)) return false;
@@ -218,6 +256,20 @@ function readJson(req) {
   });
 }
 
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(new HttpError(413, 'Das Foto ist zu groß')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 function transaction(fn) {
   const before = rev;
   db.exec('BEGIN IMMEDIATE');
@@ -281,6 +333,26 @@ function applyOp(user, op, r) {
       q.bumpList.run(r, op.id);
       return;
     }
+    case 'list.sort': {
+      if (!canAccess(user.id, op.id) || !SORTS.includes(op.sort)) return;
+      q.setSort.run(op.sort, r, op.id);
+      return;
+    }
+    case 'item.restore': {
+      const it = isId(op.id) && q.getItem.get(op.id);
+      if (!it || !it.deleted || !canAccess(user.id, it.list_id)) return;
+      q.restoreItem.run(t, r, op.id);
+      return;
+    }
+    case 'photo.delete': {
+      const ph = isId(op.id) && q.getPhoto.get(op.id);
+      if (!ph) return;
+      const it = q.getItem.get(ph.item_id);
+      if (!it || !canAccess(user.id, it.list_id)) return;
+      removePhoto(ph.id);
+      q.touchItem.run(t, r, it.id);
+      return;
+    }
     case 'list.clearDone': {
       if (!canAccess(user.id, op.id)) return;
       q.clearDone.run(t, r, op.id);
@@ -326,7 +398,7 @@ function applyOp(user, op, r) {
 const itemOut = (i) => ({
   id: i.id, listId: i.list_id, title: i.title, done: !!i.done, doneAt: i.done_at, note: i.note,
   due: i.due, position: i.position, createdBy: i.created_by, created: i.created, updated: i.updated,
-  deleted: !!i.deleted,
+  deleted: !!i.deleted, photos: i.deleted ? [] : q.photosOf.all(i.id).map((p) => p.id),
 });
 
 function syncFor(user, since) {
@@ -336,7 +408,7 @@ function syncFor(user, since) {
   const items = [];
   for (const l of q.accessibleLists.all(user.id, user.id, user.id)) {
     lists.push({
-      id: l.id, ownerId: l.owner_id, name: l.name, emoji: l.emoji, color: l.color, created: l.created,
+      id: l.id, ownerId: l.owner_id, name: l.name, emoji: l.emoji, color: l.color, sort: l.sort, created: l.created,
       sharedWith: q.sharesOf.all(l.id).map((s) => s.user_id),
     });
     const newlyShared = l.owner_id !== user.id && l.share_rev > since;
@@ -431,6 +503,40 @@ async function api(req, res, url) {
     });
     broadcast();
     return send(res, 200, { rev });
+  }
+
+  const photoMatch = p.match(/^\/api\/photos\/([A-Za-z0-9_-]{8,64})$/);
+  if (photoMatch && m === 'GET') {
+    const ph = q.getPhoto.get(photoMatch[1]);
+    const it = ph && q.getItem.get(ph.item_id);
+    if (!it || !canAccess(user.id, it.list_id)) throw new HttpError(404, 'Foto nicht gefunden');
+    const file = photoFile(ph.id);
+    if (!fs.existsSync(file)) throw new HttpError(404, 'Foto nicht gefunden');
+    res.writeHead(200, {
+      'Content-Type': 'image/jpeg',
+      'Cache-Control': 'private, max-age=31536000, immutable',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    fs.createReadStream(file).pipe(res);
+    return;
+  }
+  if (photoMatch && m === 'PUT') {
+    const id = photoMatch[1];
+    if (!String(req.headers['content-type'] || '').startsWith('image/jpeg')) throw new HttpError(415, 'Nur JPEG');
+    const it = q.getItem.get(String(url.searchParams.get('item') || ''));
+    if (!it) { req.resume(); throw new HttpError(404, 'Punkt noch nicht da'); }
+    if (it.deleted || !canAccess(user.id, it.list_id)) { req.resume(); throw new HttpError(410, 'Punkt gibt es nicht mehr'); }
+    if (q.getPhoto.get(id)) { req.resume(); return send(res, 200, { ok: true, rev }); }
+    const buf = await readRaw(req, 15 * 1024 * 1024);
+    if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) throw new HttpError(400, 'Kein gültiges Foto');
+    await fs.promises.writeFile(photoFile(id), buf);
+    transaction(() => {
+      const r = bumpRev();
+      q.insertPhoto.run(id, it.id, user.id, now());
+      q.touchItem.run(now(), r, it.id);
+    });
+    broadcast();
+    return send(res, 200, { ok: true, rev });
   }
 
   if (p === '/api/password' && m === 'POST') {
