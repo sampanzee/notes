@@ -111,7 +111,7 @@ body.auth #side { display: none; }
   display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 12px;
   transition: background .15s;
 }
-.list-row:hover { background: color-mix(in srgb, var(--surface) 60%, transparent); }
+@media (hover: hover) { .list-row:hover { background: color-mix(in srgb, var(--surface) 60%, transparent); } }
 .list-row.active { background: var(--surface); box-shadow: var(--shadow); }
 .tile {
   width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: none;
@@ -126,7 +126,7 @@ body.auth #side { display: none; }
   display: flex; align-items: center; gap: 12px; padding: 12px 10px; margin-top: 8px;
   border-radius: 12px; color: var(--muted); font-weight: 600;
 }
-.new-list:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 60%, transparent); }
+@media (hover: hover) { .new-list:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 60%, transparent); } }
 .new-list svg { width: 40px; height: 22px; }
 .empty-side { padding: 12px 10px; color: var(--muted); }
 .empty-side p { margin: 0 0 10px; }
@@ -415,3 +415,24 @@ body.auth #main { min-height: 100dvh; justify-content: center; }
 .viewer-img .nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: rgba(0,0,0,.45); color: #fff; }
 .viewer-img .prev { left: 10px; }
 .viewer-img .next { right: 10px; }
+
+/* ---------- Revision 1.3: Listen verschieben, Was ist neu */
+#side a.list-row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+#side a.list-row.shifting { transition: transform .18s cubic-bezier(.2, 0, 0, 1); }
+#side a.list-row.dragging {
+  position: relative; z-index: 5; background: var(--surface); box-shadow: var(--shadow-lg); transition: none; cursor: grabbing;
+}
+#side a.list-row.dropping { position: relative; z-index: 5; transition: transform .18s cubic-bezier(.2, 0, 0, 1); }
+body.is-dragging { cursor: grabbing; }
+body.is-dragging #side { touch-action: none; }
+
+.cl-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.cl-head h2 { margin: 0; }
+.cl-emoji { font-size: 26px; }
+.cl-ver { margin: 10px 0 6px; }
+.cl-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+.cl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.cl-list li { display: flex; gap: 12px; align-items: flex-start; font-size: 16px; line-height: 1.4; }
+.cl-icon { font-size: 20px; line-height: 1.2; flex: none; width: 28px; text-align: center; }
+.sheet-card .btn.wide { margin-top: 18px; }
+.btn.soft-card { background: var(--surface); box-shadow: var(--shadow); }

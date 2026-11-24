@@ -24,6 +24,43 @@ const SORTS = {
   due: 'Nach Fälligkeit',
 };
 const THEMES = { auto: 'Automatisch', light: 'Hell', dark: 'Dunkel' };
+
+// Was ist neu? Neueste Version immer oben. Die oberste Versionsnummer muss zu package.json passen.
+const CHANGELOG = [
+  {
+    version: '1.3.0',
+    items: [
+      ['✋', 'Du kannst deine Listen jetzt selbst sortieren: Liste in der Übersicht kurz gedrückt halten und an die gewünschte Stelle ziehen. Jede Person hat ihre eigene Reihenfolge.'],
+      ['🎉', 'Nach einem Update siehst du hier kurz, was neu ist. Unter Einstellungen → „Was ist neu?“ kannst du es jederzeit wieder aufrufen.'],
+    ],
+  },
+  {
+    version: '1.2.0',
+    items: [
+      ['🔄', 'Neue Versionen kommen jetzt automatisch. Die App lädt sie selbst oder zeigt unten „Neue Version verfügbar“.'],
+    ],
+  },
+  {
+    version: '1.1.1',
+    items: [
+      ['🧈', 'Abhaken ohne Ruckeln: Erledigte Punkte gleiten jetzt sanft aus der Liste.'],
+    ],
+  },
+  {
+    version: '1.1.0',
+    items: [
+      ['🌗', 'Hell, Dunkel oder Automatisch – umschaltbar oben neben deinem Buchstaben oder in den Einstellungen.'],
+      ['↕️', 'Punkte in einer Liste sortieren: wie hinzugefügt, neueste zuerst, alphabetisch oder nach Fälligkeit (Drei-Punkte-Menü).'],
+      ['📷', 'Fotos an Punkten: Punkt antippen und ein Foto aufnehmen oder aus der Galerie wählen – klappt auch ohne Netz.'],
+    ],
+  },
+];
+function cmpVersion(a, b) {
+  const pa = String(a || '0').split('.').map(Number);
+  const pb = String(b || '0').split('.').map(Number);
+  for (let i = 0; i < 3; i++) { if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0); }
+  return 0;
+}
 const SUGGESTIONS = [
   { name: 'Einkaufsliste', emoji: '🛒', color: 'green' },
   { name: 'Meine Aufgaben', emoji: '✅', color: 'blue' },
@@ -181,6 +218,15 @@ function applyLocal(op) {
       if (l && l.ownerId === me.id) l.sharedWith = op.userIds.slice();
       break;
     }
+    case 'list.order': {
+      op.ids.forEach((id, i) => { if (S.lists[id]) S.lists[id].order = i; });
+      break;
+    }
+    case 'user.seen': {
+      me.seenVersion = op.version;
+      saveJSON('notes.me', me);
+      break;
+    }
     case 'list.sort': {
       if (S.lists[op.id] && SORTS[op.sort]) S.lists[op.id].sort = op.sort;
       break;
@@ -323,6 +369,38 @@ function mergeSync(d) {
   for (const id in S.items) if (!S.lists[S.items[id].listId]) delete S.items[id];
   saveState();
   renderAll();
+  maybeShowChangelog();
+}
+
+// ---------------------------------------------------------------- Was ist neu?
+let changelogChecked = false;
+function maybeShowChangelog() {
+  if (changelogChecked) return;
+  changelogChecked = true;
+  if (cmpVersion(CHANGELOG[0].version, me.seenVersion) <= 0) return;
+  setTimeout(() => {
+    if (!$('#sheet').hidden) { changelogChecked = false; return; } // später nochmal versuchen
+    showChangelog(false);
+  }, 500);
+}
+function showChangelog(all) {
+  const entries = all ? CHANGELOG : CHANGELOG.filter((e) => cmpVersion(e.version, me.seenVersion) > 0);
+  if (!entries.length) return;
+  openSheet(`
+    <div class="cl-head"><span class="cl-emoji">✨</span><h2>Neu in Notes</h2></div>
+    ${entries.map((e, i) => `
+      <section class="cl-ver">
+        ${entries.length > 1 || all ? `<div class="cl-label">${i === 0 ? 'Aktuell' : 'Davor'} · Version ${esc(e.version.replace(/\.0$/, ''))}</div>` : ''}
+        <ul class="cl-list">${e.items.map(([icon, text]) => `<li><span class="cl-icon">${icon}</span><span>${esc(text)}</span></li>`).join('')}</ul>
+      </section>`).join('')}
+    <button class="btn primary wide" data-x="ok">Alles klar</button>`, (sheet) => {
+    const done = () => {
+      closeSheet();
+      if (cmpVersion(CHANGELOG[0].version, me.seenVersion) > 0) change({ kind: 'user.seen', version: CHANGELOG[0].version });
+    };
+    sheet.querySelector('[data-x="ok"]').onclick = done;
+    sheet.querySelector('.sheet-backdrop').onclick = done;
+  });
 }
 
 function reapplyPendingPhotos() {
@@ -461,7 +539,8 @@ applyTheme();
 const listColor = (l) => COLORS[l?.color] || COLORS.blue;
 const userName = (id) => (S.users.find((u) => u.id === id)?.name) || 'Unbekannt';
 const initials = (name) => esc(String(name || '?').trim().slice(0, 1).toUpperCase());
-const sortedLists = () => Object.values(S.lists).sort((a, b) => (a.created - b.created) || a.id.localeCompare(b.id));
+const orderOf = (l) => (typeof l.order === 'number' ? l.order : 1e9);
+const sortedLists = () => Object.values(S.lists).sort((a, b) => (orderOf(a) - orderOf(b)) || (a.created - b.created) || a.id.localeCompare(b.id));
 const itemsOf = (listId) => Object.values(S.items).filter((i) => i.listId === listId);
 const openCount = (listId) => itemsOf(listId).filter((i) => !i.done).length;
 
@@ -614,6 +693,7 @@ function renderStatus() {
 }
 
 function renderSide(r) {
+  if (drag || pendingDrag) { sideDirty = true; return; } // während des Verschiebens nicht dazwischenfunken
   const lists = sortedLists();
   const plannedCount = Object.values(S.items).filter((i) => !i.done && i.due).length;
   const html = `
@@ -633,7 +713,7 @@ function renderSide(r) {
       <div class="section-label">Listen</div>
       ${lists.map((l) => {
         const shared = l.ownerId !== me.id || l.sharedWith.length;
-        return `<a class="list-row ${r.listId === l.id ? 'active' : ''}" href="#/l/${l.id}" style="--lc:${listColor(l)}">
+        return `<a class="list-row ${r.listId === l.id ? 'active' : ''}" href="#/l/${l.id}" data-list="${l.id}" draggable="false" style="--lc:${listColor(l)}">
           <span class="tile">${esc(l.emoji)}</span>
           <span class="name">${esc(l.name)}${shared ? `<span class="shared-ico" title="Geteilt">${I.users}</span>` : ''}</span>
           <span class="count">${openCount(l.id) || ''}</span>
@@ -827,6 +907,7 @@ function settingsView() {
         <p class="muted">Im Browser-Menü <strong>„Zum Startbildschirm hinzufügen“</strong> bzw. <strong>„App installieren“</strong> wählen. Dann startet Notes wie eine eigene App und funktioniert auch ohne Netz.</p>
       </section>
 
+      <button class="btn wide soft-card" data-action="changelog">✨ Was ist neu?</button>
       <button class="btn danger wide" data-action="logout">Abmelden</button>
       <p class="muted small" style="text-align:center;margin:4px 0 0">Notes ${esc(appVersion || '')}</p>
     </div>`;
@@ -1207,6 +1288,7 @@ document.addEventListener('click', (ev) => {
       break;
     }
     case 'logout': logout(); break;
+    case 'changelog': showChangelog(true); break;
     case 'cycle-theme': {
       const order = ['auto', 'light', 'dark'];
       setTheme(order[(order.indexOf(prefs.theme) + 1) % order.length]);
@@ -1320,6 +1402,108 @@ document.addEventListener('change', (ev) => {
 });
 
 window.addEventListener('pagehide', flushTyping);
+
+// ---------------------------------------------------------------- Listen per Ziehen sortieren
+// Handy: Liste kurz gedrückt halten, dann ziehen. Computer: mit gedrückter Maustaste ziehen.
+let drag = null;
+let pendingDrag = null;
+let suppressClick = false;
+let sideDirty = false;
+
+function cancelPendingDrag() {
+  if (pendingDrag) clearTimeout(pendingDrag.timer);
+  pendingDrag = null;
+}
+
+function startDrag(p) {
+  clearTimeout(p.timer);
+  pendingDrag = null;
+  if (!p.row.isConnected) p.row = document.querySelector(`#side a.list-row[data-list="${p.row.dataset.list}"]`);
+  if (!p.row) return;
+  const rows = [...document.querySelectorAll('#side a.list-row[data-list]')].map((el) => {
+    const rect = el.getBoundingClientRect();
+    return { el, id: el.dataset.list, top: rect.top, h: rect.height };
+  });
+  const index = rows.findIndex((x) => x.el === p.row);
+  if (index < 0 || rows.length < 2) return;
+  const step = rows.length > 1 ? Math.abs(rows[1].top - rows[0].top) : rows[0].h + 4;
+  drag = { rows, index, target: index, step, startY: p.y, pointerId: p.pointerId };
+  p.row.classList.add('dragging');
+  document.body.classList.add('is-dragging');
+  rows.forEach((x) => { if (x.el !== p.row) x.el.classList.add('shifting'); });
+  if (navigator.vibrate) try { navigator.vibrate(15); } catch { /* egal */ }
+}
+
+function moveDrag(y) {
+  const d = drag;
+  const me0 = d.rows[d.index];
+  const minDy = d.rows[0].top - me0.top;
+  const maxDy = d.rows[d.rows.length - 1].top - me0.top;
+  const dy = Math.max(minDy - 12, Math.min(maxDy + 12, y - d.startY));
+  me0.el.style.transform = `translateY(${dy}px) scale(1.02)`;
+  const center = me0.top + me0.h / 2 + dy;
+  let target = 0;
+  d.rows.forEach((x, i) => { if (i !== d.index && x.top + x.h / 2 < center) target++; });
+  d.target = target;
+  d.rows.forEach((x, i) => {
+    if (i === d.index) return;
+    let shift = 0;
+    if (d.index < target && i > d.index && i <= target) shift = -d.step;
+    if (d.index > target && i >= target && i < d.index) shift = d.step;
+    x.el.style.transform = shift ? `translateY(${shift}px)` : '';
+  });
+}
+
+function endDrag() {
+  const d = drag;
+  drag = null;
+  document.body.classList.remove('is-dragging');
+  suppressClick = true;
+  setTimeout(() => { suppressClick = false; }, 400);
+  const ids = d.rows.map((x) => x.id);
+  const [moved] = ids.splice(d.index, 1);
+  ids.splice(d.target, 0, moved);
+  const me0 = d.rows[d.index].el;
+  // Sanft an den neuen Platz gleiten lassen, dann neu zeichnen
+  me0.style.transform = `translateY(${(d.target - d.index) * d.step}px)`;
+  me0.classList.remove('dragging');
+  me0.classList.add('dropping');
+  setTimeout(() => {
+    if (d.target !== d.index) change({ kind: 'list.order', ids });
+    else renderAll();
+  }, 180);
+}
+
+document.addEventListener('pointerdown', (e) => {
+  const row = e.target.closest('#side a.list-row[data-list]');
+  if (!row || e.button > 0 || drag) return;
+  const p = { row, x: e.clientX, y: e.clientY, pointerId: e.pointerId, type: e.pointerType, timer: null };
+  pendingDrag = p;
+  if (e.pointerType !== 'mouse') p.timer = setTimeout(() => startDrag(p), 350);
+});
+document.addEventListener('pointermove', (e) => {
+  if (pendingDrag && e.pointerId === pendingDrag.pointerId) {
+    const dx = Math.abs(e.clientX - pendingDrag.x);
+    const dy = Math.abs(e.clientY - pendingDrag.y);
+    if (pendingDrag.type === 'mouse') { if (dy > 6) startDrag(pendingDrag); } else if (dx > 8 || dy > 8) cancelPendingDrag();
+  }
+  if (drag && e.pointerId === drag.pointerId) { e.preventDefault(); moveDrag(e.clientY); }
+});
+const pointerEnd = (e) => {
+  if (drag && e.pointerId === drag.pointerId) endDrag();
+  else if (pendingDrag && e.pointerId === pendingDrag.pointerId) {
+    cancelPendingDrag();
+    // Aufgeschobenes Neuzeichnen erst nach dem Antippen, sonst geht der Tipp verloren
+    if (sideDirty) setTimeout(() => { if (!drag && !pendingDrag && sideDirty) { sideDirty = false; renderSide(route()); } }, 60);
+  }
+};
+document.addEventListener('pointerup', pointerEnd);
+document.addEventListener('pointercancel', pointerEnd);
+document.addEventListener('touchmove', (e) => { if (drag) e.preventDefault(); }, { passive: false });
+document.addEventListener('contextmenu', (e) => { if (drag || pendingDrag) e.preventDefault(); });
+document.addEventListener('click', (e) => {
+  if (suppressClick && e.target.closest('#side')) { e.preventDefault(); e.stopPropagation(); suppressClick = false; }
+}, true);
 
 // ---------------------------------------------------------------- Hinweise
 let toastTimer = null;
