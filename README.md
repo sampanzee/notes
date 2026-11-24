@@ -21,9 +21,8 @@ Beim ersten Aufruf legt man das Verwalter-Konto an, weitere Personen unter Einst
 
 ## Update
 
-```
-cd /volume1/docker/notes
-git pull
-sudo docker build -t notes:latest .
-```
-Danach in Portainer den Container `notes` neu erstellen (Recreate). Daten und Fotos in `data/` bleiben erhalten.
+Neue Dateien auf GitHub hochladen – fertig. GitHub baut daraus automatisch das Image
+`ghcr.io/sampanzee/notes:latest` (Reiter „Actions“), Watchtower spielt es auf dem NAS ein.
+Sofort statt warten: in Portainer Stack „notes“ → Editor → „Update the stack“ mit „Re-pull image“.
+Die App auf dem Handy meldet sich danach selbst mit „Neue Version verfügbar“.
+Daten und Fotos in `/volume1/docker/notes/data` bleiben bei Updates erhalten.

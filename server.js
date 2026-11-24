@@ -14,6 +14,20 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const COOKIE = 'notes_session';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 365; // 1 Jahr angemeldet bleiben
+const PKG_VERSION = (() => { try { return require('./package.json').version; } catch { return '0'; } })();
+// Fingerabdruck aller App-Dateien: ändert sich bei jedem Update automatisch
+const BUILD = (() => {
+  const h = crypto.createHash('sha256');
+  const walk = (dir) => {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const f = path.join(dir, name);
+      if (fs.statSync(f).isDirectory()) walk(f);
+      else { h.update(name); h.update(fs.readFileSync(f)); }
+    }
+  };
+  try { walk(path.join(__dirname, 'public')); } catch { /* egal */ }
+  return h.digest('hex').slice(0, 10);
+})();
 const COLORS = ['tomato', 'orange', 'green', 'teal', 'blue', 'violet', 'pink', 'slate'];
 
 // ---------------------------------------------------------------- Datenbank
@@ -436,7 +450,7 @@ async function api(req, res, url) {
 
   if (p === '/api/status' && m === 'GET') {
     const u = currentUser(req);
-    return send(res, 200, { setup: q.countUsers.get().n === 0, user: u ? publicUser(u) : null });
+    return send(res, 200, { setup: q.countUsers.get().n === 0, user: u ? publicUser(u) : null, version: PKG_VERSION, build: BUILD });
   }
 
   if (p === '/api/setup' && m === 'POST') {
@@ -595,6 +609,17 @@ function serveStatic(req, res, pathname) {
   if (rel === '/' || rel === '') rel = '/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep)) { res.writeHead(404); return res.end(); }
+  if (file === path.join(PUBLIC_DIR, 'sw.js')) {
+    // Service Worker bekommt die aktuelle Versionsnummer, damit Handys Updates sofort erkennen
+    return fs.readFile(file, 'utf8', (err, src) => {
+      if (err) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, {
+        'Content-Type': MIME['.js'], 'Cache-Control': 'no-cache, no-store', 'Service-Worker-Allowed': '/',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      res.end(src.replace(/__BUILD__/g, BUILD));
+    });
+  }
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Nicht gefunden'); }
     const etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
@@ -631,7 +656,7 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res, url.pathname);
 });
 server.keepAliveTimeout = 65000;
-server.listen(PORT, () => console.log(`Notes läuft auf Port ${PORT} (Daten: ${DATA_DIR})`));
+server.listen(PORT, () => console.log(`Notes ${PKG_VERSION} (${BUILD}) läuft auf Port ${PORT} (Daten: ${DATA_DIR})`));
 
 function shutdown() {
   for (const c of clients) { try { c.end(); } catch { /* egal */ } }

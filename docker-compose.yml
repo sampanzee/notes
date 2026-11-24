@@ -1,7 +1,6 @@
 services:
   notes:
-    build: /volume1/docker/notes
-    image: notes:latest
+    image: ghcr.io/sampanzee/notes:latest
     container_name: notes
     restart: unless-stopped
     ports:
@@ -10,5 +9,3 @@ services:
       - /volume1/docker/notes/data:/data
     environment:
       - TZ=Europe/Berlin
-    labels:
-      - com.centurylinklabs.watchtower.enable=false
