@@ -1,5 +1,5 @@
 /* Notes – Service Worker: hält die App offline verfügbar. */
-const CACHE = 'notes-v3';
+const CACHE = 'notes-__BUILD__'; // wird vom Server automatisch durch die aktuelle Version ersetzt
 const PHOTOS = 'notes-photos';
 const SHELL = [
   '/',

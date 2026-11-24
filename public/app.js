@@ -828,6 +828,7 @@ function settingsView() {
       </section>
 
       <button class="btn danger wide" data-action="logout">Abmelden</button>
+      <p class="muted small" style="text-align:center;margin:4px 0 0">Notes ${esc(appVersion || '')}</p>
     </div>`;
 }
 
@@ -1324,6 +1325,7 @@ window.addEventListener('pagehide', flushTyping);
 let toastTimer = null;
 function toast(msg) {
   const t = $('#toast');
+  if (t.classList.contains('sticky')) return; // Update-Hinweis nicht überdecken
   t.innerHTML = `<span>${esc(msg)}</span>`;
   t.classList.add('show');
   clearTimeout(toastTimer);
@@ -1401,8 +1403,40 @@ async function logout() {
   showAuth('login');
 }
 
+// ---------------------------------------------------------------- Updates der App
+const bootedAt = Date.now();
+let appVersion = '';
+function setupUpdates() {
+  if (!('serviceWorker' in navigator)) return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return; // allererste Installation: nichts zu tun
+    const busy = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+    if (Date.now() - bootedAt < 5000 && !busy && !outbox.length) {
+      // Gerade erst geöffnet: still neu laden, man merkt nur ein kurzes Blinzeln
+      reloading = true;
+      location.reload();
+      return;
+    }
+    showUpdateToast();
+  });
+  navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then((reg) => {
+    const check = () => reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+    setInterval(check, 30 * 60 * 1000);
+  }).catch(() => {});
+}
+function showUpdateToast() {
+  const t = $('#toast');
+  clearTimeout(toastTimer);
+  t.innerHTML = '<span>Neue Version verfügbar</span><button>Jetzt laden</button>';
+  t.classList.add('show', 'sticky');
+  t.querySelector('button').onclick = () => { flushTyping(); location.reload(); };
+}
+
 async function boot() {
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  setupUpdates();
   const saved = loadJSON('notes.me', null);
   if (saved) {
     // Sofort mit den gespeicherten Daten starten – auch ohne Netz
@@ -1413,6 +1447,7 @@ async function boot() {
     renderAll(true);
     try {
       const s = await api('GET', '/api/status');
+      appVersion = s.version ? `${s.version} · ${s.build}` : '';
       if (!s.user) { authed = false; showAuth(s.setup ? 'setup' : 'login'); return; }
       if (s.user.id !== me.id) { startApp(s.user); return; }
       me = s.user;
@@ -1426,6 +1461,7 @@ async function boot() {
   }
   try {
     const s = await api('GET', '/api/status');
+    appVersion = s.version ? `${s.version} · ${s.build}` : '';
     if (s.user) startApp(s.user);
     else showAuth(s.setup ? 'setup' : 'login');
   } catch {
