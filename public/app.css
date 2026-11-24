@@ -172,8 +172,8 @@ body.auth #side { display: none; }
 .item {
   display: flex; align-items: center; gap: 4px; background: var(--surface); border-radius: var(--radius);
   box-shadow: var(--shadow); min-height: 54px; padding-left: 6px;
-  animation: in .18s ease-out;
 }
+.item.fresh { animation: in .18s ease-out; }
 @keyframes in { from { opacity: 0; transform: translateY(4px); } }
 .check {
   width: 44px; height: 44px; display: grid; place-items: center; flex: none; position: relative;
@@ -187,13 +187,24 @@ body.auth #side { display: none; }
 @media (hover: hover) { .check:hover svg { color: color-mix(in srgb, var(--lc, var(--c)) 60%, transparent); transform: scale(1); } }
 .item.done .check::before, .detail.done .check::before { background: var(--lc, var(--c)); border-color: var(--lc, var(--c)); }
 .item.done .check svg, .detail.done .check svg { color: #fff; transform: scale(1); }
-.item.lingering .check::before { animation: pop .3s ease-out; }
+.item.lingering .check::before { animation: pop .3s ease-out both; animation-delay: var(--age, 0ms); }
 @keyframes pop { 50% { transform: scale(1.25); } }
 .item-body { flex: 1; min-width: 0; padding: 10px 14px 10px 4px; display: flex; flex-direction: column; gap: 3px; }
 .item .title { overflow-wrap: anywhere; font-size: 16.5px; }
 .item.done .title { text-decoration: line-through; color: var(--muted); }
 .item.done { box-shadow: none; background: color-mix(in srgb, var(--surface) 55%, transparent); }
-.item.lingering { transition: opacity .5s .4s; opacity: .55; }
+.item.lingering { animation: linger .7s ease-out both; animation-delay: var(--age, 0ms); }
+@keyframes linger { 0%, 40% { opacity: 1; } 100% { opacity: .5; } }
+.item.collapsing {
+  overflow: hidden; min-height: 0; margin-bottom: -6px; opacity: 0; box-shadow: none;
+  transition: height .25s cubic-bezier(.4, 0, .2, 1), margin .25s cubic-bezier(.4, 0, .2, 1), opacity .15s ease-out;
+  animation: none;
+}
+.status-slot { display: contents; }
+.status-ico { width: 32px; height: 40px; display: grid; place-items: center; flex: none; color: var(--muted); }
+.status-ico svg { width: 20px; height: 20px; }
+.status-ico.off { color: var(--danger); }
+.status-ico .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); animation: pulse 1s infinite alternate; }
 .meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; color: var(--muted); align-items: center; }
 .meta svg { width: 14px; height: 14px; }
 .meta > span { display: inline-flex; align-items: center; gap: 4px; }

@@ -61,6 +61,10 @@ let online = navigator.onLine;
 let authed = false;      // Server hat Anmeldung bestätigt (oder offline mit gespeicherten Daten)
 let es = null;           // EventSource
 const recentlyDone = new Map(); // id -> Zeitpunkt, damit abgehakte Punkte kurz sichtbar bleiben
+const collapsing = new Set();    // abgehakte Punkte, die gerade zusammenklappen
+const seenItems = new Set();     // schon angezeigte Punkte (nur neue bekommen die Einblend-Animation)
+let seenView = '';
+const LINGER_MS = 700;
 let prefs = loadJSON('notes.prefs', { showDone: {} });
 if (!prefs.showDone) prefs.showDone = {};
 if (!THEMES[prefs.theme]) prefs.theme = 'auto';
@@ -575,13 +579,39 @@ function keepFocus(fn) {
   }
 }
 
-function statusHtml() {
-  const pending = outbox.length + pendingPhotos.size;
-  if (!online) return `<span class="status off">${I.cloudOff}Offline${pending ? ' · wird später übertragen' : ''}</span>`;
-  if (pending) return '<span class="status sync"><span class="dot"></span>Wird übertragen …</span>';
+// „Wird übertragen“ erst zeigen, wenn es länger als 1,5 Sekunden dauert – normales Abhaken bleibt ruhig
+let pendingSince = 0;
+let statusTimer = null;
+function pendingCount() { return outbox.length + pendingPhotos.size; }
+function statusHtml(compact = false) {
+  const pending = pendingCount();
+  if (!pending) pendingSince = 0;
+  else if (!pendingSince) pendingSince = Date.now();
+  if (!online) {
+    const title = `Offline${pending ? ' – Änderungen werden später übertragen' : ''}`;
+    return compact
+      ? `<span class="status-ico off" title="${title}" aria-label="${title}">${I.cloudOff}</span>`
+      : `<span class="status off">${I.cloudOff}Offline${pending ? ' · wird später übertragen' : ''}</span>`;
+  }
+  if (pending) {
+    const wait = 1500 - (Date.now() - pendingSince);
+    if (wait > 0) {
+      clearTimeout(statusTimer);
+      statusTimer = setTimeout(renderStatus, wait + 50);
+      return '';
+    }
+    return compact
+      ? '<span class="status-ico sync" title="Wird übertragen" aria-label="Wird übertragen"><span class="dot"></span></span>'
+      : '<span class="status sync"><span class="dot"></span>Wird übertragen …</span>';
+  }
   return '';
 }
-function renderStatus() { document.querySelectorAll('[data-status]').forEach((el) => { el.innerHTML = statusHtml(); }); }
+function renderStatus() {
+  document.querySelectorAll('[data-status]').forEach((el) => {
+    const html = statusHtml(el.hasAttribute('data-compact'));
+    if (el.innerHTML !== html) el.innerHTML = html;
+  });
+}
 
 function renderSide(r) {
   const lists = sortedLists();
@@ -621,6 +651,9 @@ function renderSide(r) {
 function itemRow(it, opts = {}) {
   const l = S.lists[it.listId];
   const lingering = recentlyDone.has(it.id);
+  const fresh = !seenItems.has(it.id) && seenView === location.hash;
+  if (collapsing.has(it.id)) return '';
+  const age = lingering ? Date.now() - recentlyDone.get(it.id) : 0;
   const href = opts.planned ? `#/geplant/i/${it.id}` : `#/l/${it.listId}/i/${it.id}`;
   const meta = [];
   if (opts.planned && l) meta.push(`<span class="meta-list" style="--lc:${listColor(l)}">${esc(l.emoji)} ${esc(l.name)}</span>`);
@@ -631,7 +664,7 @@ function itemRow(it, opts = {}) {
   if (l && (l.ownerId !== me.id || l.sharedWith.length) && it.createdBy && it.createdBy !== me.id) {
     meta.push(`<span class="by">${esc(userName(it.createdBy))}</span>`);
   }
-  return `<div class="item ${it.done ? 'done' : ''} ${lingering ? 'lingering' : ''}" data-id="${it.id}" style="--lc:${listColor(l)}">
+  return `<div class="item ${it.done ? 'done' : ''} ${lingering ? 'lingering' : ''} ${fresh ? 'fresh' : ''}" data-id="${it.id}" style="--lc:${listColor(l)};--age:-${age}ms">
     <button class="check" data-action="toggle" data-id="${it.id}" aria-label="${it.done ? 'Wieder öffnen' : 'Abhaken'}">${I.check}</button>
     <a class="item-body" href="${href}">
       <span class="title">${esc(it.title)}</span>
@@ -642,12 +675,16 @@ function itemRow(it, opts = {}) {
 }
 
 function renderMain(r) {
+  const main = $('#main');
   keepFocus(() => {
     if (r.view === 'list') $('#main').innerHTML = listView(S.lists[r.listId]);
     else if (r.view === 'planned') $('#main').innerHTML = plannedView();
     else if (r.view === 'settings') $('#main').innerHTML = settingsView();
     else $('#main').innerHTML = welcomeView();
   });
+  // Merken, welche Punkte schon zu sehen waren
+  if (seenView !== location.hash) { seenItems.clear(); seenView = location.hash; }
+  main.querySelectorAll('.item[data-id]').forEach((el) => seenItems.add(el.dataset.id));
 }
 
 function listView(l) {
@@ -662,9 +699,9 @@ function listView(l) {
       <button class="icon-btn back" data-action="back" aria-label="Zurück">${I.back}</button>
       <div class="list-title"><span class="big-emoji">${esc(l.emoji)}</span><h1>${esc(l.name)}</h1></div>
       ${people.length ? `<button class="people" data-action="${isOwner ? 'share' : 'list-menu'}" aria-label="Geteilt mit">${avatars(people)}</button>` : ''}
+      <span data-status data-compact class="status-slot">${statusHtml(true)}</span>
       <button class="icon-btn" data-action="list-menu" aria-label="Listenmenü">${I.more}</button>
     </header>
-    <div data-status class="status-wrap inline">${statusHtml()}</div>
     <section class="items">
       ${open.map((i) => itemRow(i)).join('')}
       ${!open.length && !done.length ? `<div class="empty"><span class="empty-emoji">${esc(l.emoji)}</span><p>Noch leer. Schreib unten den ersten Punkt hinein.</p></div>` : ''}
@@ -730,8 +767,8 @@ function plannedView() {
     <header class="list-head" style="--c:${COLORS.tomato}">
       <button class="icon-btn back" data-action="back" aria-label="Zurück">${I.back}</button>
       <div class="list-title"><span class="big-emoji">📅</span><h1>Geplant</h1></div>
+      <span data-status data-compact class="status-slot">${statusHtml(true)}</span>
     </header>
-    <div data-status class="status-wrap inline">${statusHtml()}</div>
     ${body || '<div class="empty"><span class="empty-emoji">📅</span><p>Nichts geplant. Punkte mit Fälligkeitsdatum erscheinen hier – aus allen Listen.</p></div>'}`;
 }
 
@@ -912,7 +949,7 @@ function toggleItem(id) {
   const done = !it.done;
   if (done) {
     recentlyDone.set(id, Date.now());
-    setTimeout(() => { recentlyDone.delete(id); renderAll(); }, 900);
+    setTimeout(() => collapseDone(id), LINGER_MS);
     if (navigator.vibrate) try { navigator.vibrate(12); } catch { /* egal */ }
   } else {
     recentlyDone.delete(id);
@@ -920,6 +957,24 @@ function toggleItem(id) {
   const fields = { done };
   if (!done) fields.position = nextPosition(it.listId);
   change({ kind: 'item.put', id, fields });
+}
+
+// Abgehakten Punkt weich zusammenklappen, damit die Liste nicht springt
+function collapseDone(id) {
+  if (!recentlyDone.has(id)) return;
+  const el = document.querySelector(`#main .item[data-id="${id}"]`);
+  const finish = () => {
+    recentlyDone.delete(id);
+    collapsing.delete(id);
+    renderAll();
+  };
+  if (!el || !el.closest('.items:not(.done-list)') || matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
+  collapsing.add(id);
+  el.style.height = `${el.offsetHeight}px`;
+  el.classList.add('collapsing');
+  el.getBoundingClientRect(); // Startzustand festhalten
+  el.style.height = '0px';
+  setTimeout(finish, 260);
 }
 
 function nextPosition(listId) {
