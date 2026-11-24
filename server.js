@@ -96,6 +96,15 @@ CREATE INDEX IF NOT EXISTS idx_photos_item ON photos(item_id);
 if (!db.prepare('PRAGMA table_info(lists)').all().some((c) => c.name === 'sort')) {
   db.exec("ALTER TABLE lists ADD COLUMN sort TEXT NOT NULL DEFAULT 'added'");
 }
+if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'seen_version')) {
+  db.exec('ALTER TABLE users ADD COLUMN seen_version TEXT');
+}
+db.exec(`CREATE TABLE IF NOT EXISTS list_order (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  list_id TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+  position REAL NOT NULL,
+  PRIMARY KEY (user_id, list_id)
+)`);
 const PHOTO_DIR = path.join(DATA_DIR, 'photos');
 fs.mkdirSync(PHOTO_DIR, { recursive: true });
 const SORTS = ['added', 'newest', 'alpha', 'due'];
@@ -107,10 +116,13 @@ const q = {
   userByName: db.prepare('SELECT * FROM users WHERE name = ?'),
   userById: db.prepare('SELECT * FROM users WHERE id = ?'),
   allUsers: db.prepare('SELECT id, name, is_admin FROM users ORDER BY name COLLATE NOCASE'),
-  insertUser: db.prepare('INSERT INTO users(name, pw, is_admin, created) VALUES(?, ?, ?, ?)'),
+  insertUser: db.prepare('INSERT INTO users(name, pw, is_admin, created, seen_version) VALUES(?, ?, ?, ?, ?)'),
+  setSeen: db.prepare('UPDATE users SET seen_version = ? WHERE id = ?'),
+  setOrder: db.prepare(`INSERT INTO list_order(user_id, list_id, position) VALUES(?, ?, ?)
+                        ON CONFLICT(user_id, list_id) DO UPDATE SET position = excluded.position`),
   setPw: db.prepare('UPDATE users SET pw = ? WHERE id = ?'),
   insertSession: db.prepare('INSERT INTO sessions(token, user_id, created, last_seen) VALUES(?, ?, ?, ?)'),
-  sessionUser: db.prepare(`SELECT u.id, u.name, u.is_admin, s.last_seen FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`),
+  sessionUser: db.prepare(`SELECT u.id, u.name, u.is_admin, u.seen_version, s.last_seen FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`),
   touchSession: db.prepare('UPDATE sessions SET last_seen = ? WHERE token = ?'),
   deleteSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
   deleteOtherSessions: db.prepare('DELETE FROM sessions WHERE user_id = ? AND token <> ?'),
@@ -126,7 +138,8 @@ const q = {
   insertShare: db.prepare('INSERT OR IGNORE INTO shares(list_id, user_id, rev) VALUES(?, ?, ?)'),
   deleteShare: db.prepare('DELETE FROM shares WHERE list_id = ? AND user_id = ?'),
   accessibleLists: db.prepare(`
-    SELECT l.*, (SELECT s.rev FROM shares s WHERE s.list_id = l.id AND s.user_id = ?) AS share_rev
+    SELECT l.*, (SELECT s.rev FROM shares s WHERE s.list_id = l.id AND s.user_id = ?) AS share_rev,
+      (SELECT o.position FROM list_order o WHERE o.list_id = l.id AND o.user_id = ?) AS my_order
     FROM lists l
     WHERE l.deleted = 0 AND (l.owner_id = ? OR EXISTS (SELECT 1 FROM shares s WHERE s.list_id = l.id AND s.user_id = ?))
     ORDER BY l.created`),
@@ -229,14 +242,16 @@ function currentUser(req) {
   const u = q.sessionUser.get(hashed);
   if (!u) return null;
   if (now() - u.last_seen > 60 * 60 * 1000) q.touchSession.run(now(), hashed);
-  return { id: u.id, name: u.name, isAdmin: !!u.is_admin, token: hashed };
+  return { id: u.id, name: u.name, isAdmin: !!u.is_admin, seenVersion: u.seen_version || null, token: hashed };
 }
 function startSession(req, res, userId) {
   const token = crypto.randomBytes(32).toString('base64url');
   q.insertSession.run(sha(token), userId, now(), now());
   res.setHeader('Set-Cookie', sessionCookie(req, token, SESSION_MAX_AGE));
 }
-const publicUser = (u) => ({ id: u.id, name: u.name, isAdmin: !!(u.isAdmin ?? u.is_admin) });
+const publicUser = (u) => ({
+  id: u.id, name: u.name, isAdmin: !!(u.isAdmin ?? u.is_admin), seenVersion: (u.seenVersion ?? u.seen_version) || null,
+});
 
 function send(res, status, body) {
   const data = JSON.stringify(body);
@@ -347,6 +362,16 @@ function applyOp(user, op, r) {
       q.bumpList.run(r, op.id);
       return;
     }
+    case 'list.order': {
+      // Eigene Reihenfolge der Listen – gilt nur für diese Person
+      if (!Array.isArray(op.ids)) return;
+      op.ids.slice(0, 500).forEach((id, i) => { if (canAccess(user.id, id)) q.setOrder.run(user.id, id, i); });
+      return;
+    }
+    case 'user.seen': {
+      if (typeof op.version === 'string' && op.version.length < 20) q.setSeen.run(op.version, user.id);
+      return;
+    }
     case 'list.sort': {
       if (!canAccess(user.id, op.id) || !SORTS.includes(op.sort)) return;
       q.setSort.run(op.sort, r, op.id);
@@ -420,9 +445,9 @@ function syncFor(user, since) {
   if (!Number.isFinite(since) || since <= 0 || since > rev) { since = 0; full = true; }
   const lists = [];
   const items = [];
-  for (const l of q.accessibleLists.all(user.id, user.id, user.id)) {
+  for (const l of q.accessibleLists.all(user.id, user.id, user.id, user.id)) {
     lists.push({
-      id: l.id, ownerId: l.owner_id, name: l.name, emoji: l.emoji, color: l.color, sort: l.sort, created: l.created,
+      id: l.id, ownerId: l.owner_id, name: l.name, emoji: l.emoji, color: l.color, sort: l.sort, order: l.my_order ?? null, created: l.created,
       sharedWith: q.sharesOf.all(l.id).map((s) => s.user_id),
     });
     const newlyShared = l.owner_id !== user.id && l.share_rev > since;
@@ -460,7 +485,7 @@ async function api(req, res, url) {
     const pw = String(body.password || '');
     if (!name) throw new HttpError(400, 'Bitte einen Namen eingeben');
     if (pw.length < 6) throw new HttpError(400, 'Das Passwort braucht mindestens 6 Zeichen');
-    const info = q.insertUser.run(name, hashPw(pw), 1, now());
+    const info = q.insertUser.run(name, hashPw(pw), 1, now(), PKG_VERSION);
     startSession(req, res, Number(info.lastInsertRowid));
     return send(res, 200, { user: publicUser(q.userById.get(Number(info.lastInsertRowid))) });
   }
@@ -572,7 +597,7 @@ async function api(req, res, url) {
     if (!name) throw new HttpError(400, 'Bitte einen Namen eingeben');
     if (pw.length < 6) throw new HttpError(400, 'Das Passwort braucht mindestens 6 Zeichen');
     if (q.userByName.get(name)) throw new HttpError(400, 'Diesen Namen gibt es schon');
-    q.insertUser.run(name, hashPw(pw), body.isAdmin ? 1 : 0, now());
+    q.insertUser.run(name, hashPw(pw), body.isAdmin ? 1 : 0, now(), PKG_VERSION);
     transaction(() => bumpRev());
     broadcast();
     return send(res, 200, { ok: true });
